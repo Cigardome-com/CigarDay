@@ -34,6 +34,7 @@ import http.client
 import json
 import os
 import pathlib
+import re
 import socket
 import sys
 import time
@@ -255,9 +256,13 @@ def _upath(chat):
 
 def load_user(chat):
     try:
-        return json.loads(_upath(chat).read_text(encoding="utf-8"))
+        u = json.loads(_upath(chat).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
+    # Оценки — только целые 1–5: файл мог остаться от старой версии бота.
+    u["ratings"] = {k: v for k, v in (u.get("ratings") or {}).items()
+                    if isinstance(v, int) and 1 <= v <= 5}
+    return u
 
 
 def save_user(chat, u):
@@ -548,12 +553,35 @@ def on_message(m):
         send(chat, "Выберите в меню внизу 👇", reply_kb=MENU_KB)
 
 
+# callback_data присылает клиент, и подделать его можно: разбираем строго,
+# по белому списку форм, а числа держим в узких пределах.
+_CB = [
+    (re.compile(r"consent|noop|load|pnew"), lambda m: (m[0],)),
+    (re.compile(r"demo:(demo1|demo2)"), lambda m: ("demo", m[1])),
+    (re.compile(r"p:([fs]):(\d{1,2})"), lambda m: ("p", m[1], int(m[2]))),
+    (re.compile(r"rv:(\d{1,2})"), lambda m: ("rv", int(m[1]))),
+    (re.compile(r"r:(\d{1,2}):([1-5])"), lambda m: ("r", int(m[1]), int(m[2]))),
+]
+
+
+def parse_cb(data):
+    for rx, conv in _CB:
+        m = rx.fullmatch(data or "")
+        if m:
+            return conv(m)
+    return None
+
+
 def on_callback(q):
     msg = q.get("message") or {}
     chat = msg["chat"]["id"]
     mid = msg.get("message_id")
     is_photo = bool(msg.get("photo"))
-    data = q.get("data") or ""
+    cb = parse_cb(q.get("data"))
+    if cb is None:
+        answer(q)
+        return
+    data = cb[0]
     u = load_user(chat)
 
     if data == "consent":
@@ -569,10 +597,10 @@ def on_callback(q):
         return
     if data == "noop":
         answer(q)
-    elif data.startswith("demo:"):
+    elif data == "demo":
         answer(q, "Загружаю пример")
-        title, demo = T.DEMOS[data[5:]]
-        do_load(chat, u, demo, data[5:], title)
+        title, demo = T.DEMOS[cb[1]]
+        do_load(chat, u, demo, cb[1], title)
     elif data == "load":
         answer(q)
         u["awaiting_load"] = True
@@ -581,19 +609,18 @@ def on_callback(q):
     elif data == "pnew":
         answer(q, "Подбираю…")
         show_pick(chat, u, fresh=True, mid=mid if is_photo else None)
-    elif data.startswith("p:"):
-        _, tab, i = data.split(":")
+    elif data == "p":
+        _, tab, i = cb
         answer(q)
         if not u.get("pick"):
             show_pick(chat, u, fresh=True, mid=mid if is_photo else None)
         else:
-            show_pick(chat, u, tab=tab, i=int(i), mid=mid if is_photo else None)
-    elif data.startswith("rv:"):
+            show_pick(chat, u, tab=tab, i=i, mid=mid if is_photo else None)
+    elif data == "rv":
         answer(q)
-        show_rate(chat, u, int(data[3:]), mid=mid if is_photo else None)
-    elif data.startswith("r:"):
-        _, i, n = data.split(":")
-        i, n = int(i), int(n)
+        show_rate(chat, u, cb[1], mid=mid if is_photo else None)
+    elif data == "r":
+        _, i, n = cb
         order = u.get("rate_order") or []
         if not order or i >= len(order) or order[i] not in {h["cid"] for h in u.get("history") or []}:
             answer(q, "История изменилась — откройте оценку заново")
