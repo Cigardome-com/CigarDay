@@ -362,6 +362,13 @@ def _btn(text, data):
     return {"text": text, "callback_data": data}
 
 
+def shop_url(it):
+    """Страница сигары на cigarday.ru — оформление там, по правилам магазина;
+    сам бот заказов не принимает. Только https://cigarday.ru/…"""
+    u = (it or {}).get("url") or ""
+    return u if re.fullmatch(r"https://(www\.)?cigarday\.ru/[\w\-/%.]*", u) else None
+
+
 # ── сценарии ───────────────────────────────────────────────────────────
 
 def ask_consent(chat):
@@ -442,6 +449,9 @@ def pick_slide(u, tab, i):
         kb.append([_btn("◀", f"p:{tab}:{(i - 1) % len(items)}"),
                    _btn(f"{i + 1} / {len(items)}", "noop"),
                    _btn("▶", f"p:{tab}:{(i + 1) % len(items)}")])
+    url = shop_url(it)
+    if url:
+        kb.append([{"text": "🛒 Открыть в магазине CigarDay", "url": url}])
     kb.append([_btn("⭐ Оценить покупки", "rv:0"), _btn("↻ Обновить", "pnew")])
     return x["cid"], cap, kb
 
