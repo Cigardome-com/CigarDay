@@ -5,7 +5,20 @@ Telegram) и демо-истории.
 Тон — подсказка знатока, не продавец. 15-ФЗ: никаких скидок, акций,
 «успейте», никакого «заказать» — цена и наличие только как информация.
 Тексты перед живым запуском показать юристу CigarDay.
+
+Вёрстка карточки (подпись к фото, до 1024 знаков):
+
+  Montecristo Edmundo
+  Куба · Robusto · 137×52 мм · ~55 мин
+
+  Крепость  ●●●●○  средняя-полная
+  Ноты  какао · фрукты · мёд
+  ┃ Похожа на My Father La Opulencia Toro, которую вы берёте чаще
+  ┃ других: тот же формат, та же крепость, ноты какао и земли
+
+  2 970 ₽ за штуку · есть в CigarDay
 """
+import datetime
 import html
 
 import reco as R
@@ -35,6 +48,10 @@ NOTE_RU = {
     "cream": "сливки", "fruit": "фрукты", "sweet": "мёд", "floral": "цветы",
     "herb": "травы", "toast": "поджаренный хлеб",
 }
+COUNTRY_RU = {"Cuba": "Куба", "Dominican Republic": "Доминикана", "Nicaragua": "Никарагуа",
+              "Honduras": "Гондурас", "Costa Rica": "Коста-Рика", "USA": "США",
+              "United States": "США", "Mexico": "Мексика", "Ecuador": "Эквадор",
+              "Brazil": "Бразилия", "Panama": "Панама", "Peru": "Перу"}
 
 
 def rub(x):
@@ -45,6 +62,10 @@ def dots(n):
     return "●" * n + "○" * (5 - n) if n else ""
 
 
+def stars(n):
+    return "★" * n + "☆" * (5 - n) if n else ""
+
+
 def top_notes(it, idf, k=3):
     """Самые характерные ноты: на чём описание делает акцент (число
     упоминаний), с поправкой на редкость — «сладость» есть почти у всех."""
@@ -53,32 +74,101 @@ def top_notes(it, idf, k=3):
     return [NOTE_RU.get(n, n) for n in ks[:k]]
 
 
-def card(it, why, idf, html_mode=True):
-    e = html.escape if html_mode else (lambda s: s)
-    b = (lambda s: f"<b>{e(s)}</b>") if html_mode else (lambda s: s.upper())
-    i = (lambda s: f"<i>{e(s)}</i>") if html_mode else (lambda s: s)
-    lines = [b(it["name"])]
-    shape = []
+def shape_line(it):
+    parts = []
+    c = COUNTRY_RU.get(it.get("country") or "", it.get("country") or "")
+    if c:
+        parts.append(c)
     if it.get("format"):
-        shape.append(it["format"])
+        parts.append(it["format"])
     if it.get("length_mm") and it.get("ring"):
-        shape.append(f"{it['length_mm']} мм × {it['ring']}")
+        parts.append(f"{it['length_mm']}\u00a0мм\u00a0×\u00a0{it['ring']}")
     if it.get("smoke_min"):
-        shape.append(f"~{it['smoke_min']} мин")
-    if shape:
-        lines.append(e(" · ".join(shape)))
+        parts.append(f"~{it['smoke_min']} мин")
+    return " · ".join(parts)
+
+
+def leaves_line(it):
+    """Листы — только когда они что-то говорят: у кубинских все три «Куба»."""
+    w, b, f = it.get("wrapper") or [], it.get("binder") or [], it.get("filler") or []
+    if not w or set(w + b + f) == {"Куба"}:
+        return ""
+    inner = list(dict.fromkeys(b + f))
+    return f"Покровный лист — {', '.join(w)}" + (f", внутри — {', '.join(inner)}" if inner else "")
+
+
+def _bold_name(reason, name):
+    e = html.escape(reason)
+    n = html.escape(name or "")
+    return e.replace(n, f"<b>{n}</b>", 1) if n and n in e else e
+
+
+def card(it, why, idf, html_mode=True, anchor_name=None, rating=None, note=None):
+    """Подпись к фото сигары. why — причина (строка из reco), rating —
+    оценка клиента для «любимых», note — приписка (например, кого нет)."""
+    if not html_mode:
+        return _plain(it, why, idf)
+    e = html.escape
+    out = [f"<b>{e(it['name'])}</b>"]
+    sh = shape_line(it)
+    if sh:
+        out.append(f"<i>{e(sh)}</i>")
+    out.append("")
     if it.get("strength"):
-        lines.append(e(f"Крепость: {R.strength_ru(it['strength'])} {dots(it['strength'])}"))
-    if it.get("wrapper") and set(it["wrapper"]) != {"Куба"}:
-        lines.append(e("Листы: покровный — " + ", ".join(it["wrapper"]) +
-                       "; связующий — " + ", ".join(it["binder"]) +
-                       "; наполнитель — " + ", ".join(it["filler"])))
+        out.append(f"Крепость  {dots(it['strength'])}  {e(R.strength_ru(it['strength']))}")
     notes = top_notes(it, idf)
     if notes:
-        lines.append(e("Ноты: " + ", ".join(notes)))
-    lines.append(e(f"{rub(it['price'])} за штуку · есть в CigarDay"))
+        out.append("Ноты  " + e(" · ".join(notes)))
+    lv = leaves_line(it)
+    if lv:
+        out.append(e(lv))
+    if rating in (4, 5):
+        out += ["", f"<blockquote>Ваша оценка  {stars(rating)}</blockquote>"]
+    elif why:
+        text = why[0].upper() + why[1:]
+        out += ["", f"<blockquote>{_bold_name(text, anchor_name)}</blockquote>"]
+    out += ["", f"<b>{e(rub(it['price']))}</b> за штуку · есть в CigarDay"]
+    if note:
+        out.append(f"<i>{e(note)}</i>")
+    return "\n".join(out)
+
+
+def rate_card(it, stat, rating, idx, total):
+    """Подпись к фото в пошаговой оценке покупок."""
+    e = html.escape
+    d = stat["last"].strftime("%d.%m.%Y") if stat.get("last") else ""
+    if stat["times"] > 1:
+        bought = f"Брали {stat['times']} раз{'а' if 2 <= stat['times'] <= 4 else ''}" + (f", последний — {d}" if d else "")
+    else:
+        bought = f"Брали {d}" if d else "Брали один раз"
+    out = [f"<b>{e(it['name'])}</b>"]
+    sh = shape_line(it)
+    if sh:
+        out.append(f"<i>{e(sh)}</i>")
+    out += ["", e(bought)]
+    out.append(f"Ваша оценка  {stars(rating)}" if rating else "<i>Как она вам? Нажмите на звезду</i>")
+    if not it.get("in_stock"):
+        out.append("<i>Сейчас нет в наличии в CigarDay</i>")
+    out += ["", f"<i>Покупка {idx} из {total}</i>"]
+    return "\n".join(out)
+
+
+def _plain(it, why, idf):
+    lines = [it["name"].upper()]
+    sh = shape_line(it)
+    if sh:
+        lines.append(sh)
+    if it.get("strength"):
+        lines.append(f"Крепость: {R.strength_ru(it['strength'])} {dots(it['strength'])}")
+    lv = leaves_line(it)
+    if lv:
+        lines.append(lv)
+    notes = top_notes(it, idf)
+    if notes:
+        lines.append("Ноты: " + ", ".join(notes))
+    lines.append(f"{rub(it['price'])} за штуку · есть в CigarDay")
     if why:
-        lines.append(i("Почему: " + why))
+        lines.append("Почему: " + why)
     return "\n".join(lines)
 
 
@@ -101,3 +191,7 @@ def preview(res, catalog, ratings=None):
     for s in res["suggestions"]:
         out += ["", card(s["item"], s["reason"], idf, html_mode=False)]
     return "\n".join(out)
+
+
+def today_ru():
+    return datetime.date.today().strftime("%d.%m.%Y")

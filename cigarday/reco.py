@@ -71,6 +71,7 @@ def build_catalog(prices, profiles, retailer=RETAILER):
             "cid": cid,
             "name": c.get("name") or prof.get("name") or cid,
             "brand": ref.get("brand") or prof.get("brand") or "",
+            "country": ref.get("country") or prof.get("country") or "",
             "image": ref.get("image"),
             "price": pps,
             "url": (offer or {}).get("url"),
