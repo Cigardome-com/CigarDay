@@ -11,6 +11,9 @@
   • подборка — ОДНО сообщение-карусель: фото + карточка, вкладки
     «Любимые» / «Вам понравится», стрелки ◀ 1/3 ▶ (листание правит то же
     сообщение);
+  • на карточке — «📌 Забронировать» (заявка уходит менеджеру CigarDay,
+    он связывается с клиентом; покупка и оплата — в магазине) и ссылка на
+    страницу сигары на cigarday.ru;
   • оценка — тоже одно сообщение: фото покупки и пять звёзд; после
     нажатия бот сам переходит к следующей, в конце — «Показать подборку».
 
@@ -23,8 +26,13 @@
 Состояние — по файлу на chat_id в /var/lib/cigarday-bot/users/ (0600), вне
 репозитория: репозиторий публичный. /stop удаляет файл пользователя.
 
-На этом шаге НЕТ рассылки, заказов и СБИС. 15-ФЗ: никаких скидок, акций,
-призывов купить и кнопок «заказать» — цена и наличие только как информация.
+На этом шаге НЕТ рассылки, оплаты, доставки и СБИС. 15-ФЗ: никаких скидок,
+акций, призывов купить; бот не продаёт — бронь лишь передаёт менеджеру
+просьбу связаться, покупка в магазине (решение владельца 03.11.2026; тексты
+показать юристу CigarDay).
+
+Брони приходят в чат CIGARDAY_MANAGER_CHAT (chat_id; менеджер должен хоть
+раз нажать Start у бота).
 
   python3 cigarday/bot.py            # работать (нужен токен)
 """
@@ -53,6 +61,8 @@ PHOTOS = STATE / "photos.json"
 CARDS = paths.REPO / "data" / "cards"
 EMPTY_CARD = CARDS / "_empty.jpg"
 RATE_MAX = 15
+MANAGER_CHAT = os.environ.get("CIGARDAY_MANAGER_CHAT", "").strip()
+BOOK_REPEAT_H = 12          # повторная бронь той же сигары — не чаще
 API_HOST = "api.telegram.org"
 CONNECT_TIMEOUT = 3
 POLL_TIMEOUT = 25
@@ -319,11 +329,17 @@ MENU_KB = {"keyboard": [[{"text": BTN_PICK}, {"text": BTN_RATE}],
                         [{"text": BTN_LOAD}, {"text": BTN_HELP}]],
            "resize_keyboard": True, "is_persistent": True,
            "input_field_placeholder": "Меню — кнопки ниже"}
+BTN_CANCEL = "Отмена"
+CONTACT_KB = {"keyboard": [[{"text": "📱 Поделиться номером", "request_contact": True}],
+                           [{"text": BTN_CANCEL}]],
+              "resize_keyboard": True, "one_time_keyboard": True,
+              "input_field_placeholder": "Нажмите «Поделиться номером»"}
 
 HELLO = ("<b>Здравствуйте!</b>\n\n"
          "Это бот-подсказчик CigarDay. Он смотрит, что вы уже курили и как это оценили, "
          "и подбирает сигары по вашему вкусу — из того, что сейчас есть в наличии.\n\n"
          "<blockquote>Для подбора бот хранит историю ваших покупок и ваши оценки. "
+         "Если вы бронируете сигару — ещё номер телефона, чтобы менеджер CigarDay мог с вами связаться. "
          "Удалить всё можно в любой момент командой /stop. Нажимая «Согласен», вы соглашаетесь "
          "на обработку этих данных (152-ФЗ).</blockquote>")
 
@@ -340,6 +356,8 @@ HELP = ("<b>Как пользоваться</b>\n\n"
         "по вкусу, крепости и формату — около вашей обычной цены. Листайте стрелками ◀ ▶.\n\n"
         "⭐ <b>Оценить покупки</b> — звёзды от 1 до 5. Пятёрки и четвёрки подборка учитывает сильнее, "
         "единицы и двойки — убирает и не предлагает похожие. Оценку можно поменять.\n\n"
+        "📌 <b>Забронировать</b> — кнопка на карточке: менеджер CigarDay свяжется с вами, "
+        "покупка — в магазине. 🔗 <b>На сайте</b> — подробнее о сигаре на cigarday.ru.\n\n"
         "📥 <b>Загрузить историю</b> — свои покупки текстом.\n\n"
         "/stop — удалить все ваши данные.")
 
@@ -422,8 +440,8 @@ def pick_slide(u, tab, i):
     pk = u["pick"]
     items = pk[tab]
     nf, ns = len(pk["f"]), len(pk["s"])
-    tabs = [_btn(("● " if tab == "f" else "") + f"❤️ Любимые · {nf}", "p:f:0"),
-            _btn(("● " if tab == "s" else "") + f"✨ Вам понравится · {ns}", "p:s:0")]
+    tabs = [_btn(("● " if tab == "s" else "") + f"✨ Вам понравится · {ns}", "p:s:0"),
+            _btn(("● " if tab == "f" else "") + f"❤️ Любимые · {nf}", "p:f:0")]
     kb = [tabs]
     if not items:
         if tab == "f":
@@ -449,9 +467,11 @@ def pick_slide(u, tab, i):
         kb.append([_btn("◀", f"p:{tab}:{(i - 1) % len(items)}"),
                    _btn(f"{i + 1} / {len(items)}", "noop"),
                    _btn("▶", f"p:{tab}:{(i + 1) % len(items)}")])
+    row = [_btn("📌 Забронировать", f"bk:{tab}:{i}")]
     url = shop_url(it)
     if url:
-        kb.append([{"text": "🛒 Открыть в магазине CigarDay", "url": url}])
+        row.append({"text": "🔗 На сайте", "url": url})
+    kb.append(row)
     kb.append([_btn("⭐ Оценить покупки", "rv:0"), _btn("↻ Обновить", "pnew")])
     return x["cid"], cap, kb
 
@@ -464,7 +484,7 @@ def show_pick(chat, u, tab=None, i=0, mid=None, fresh=False):
         save_user(chat, u)
     pk = u["pick"]
     if tab is None:
-        tab = "f" if pk["f"] else "s"
+        tab = "s" if pk["s"] else "f"
     cid, cap, kb = pick_slide(u, tab, i)
     if mid:
         edit_card(chat, mid, cid or "_empty", cap, kb)
@@ -514,6 +534,65 @@ def show_rate(chat, u, i=0, mid=None, done=False):
 
 # ── обработчики ────────────────────────────────────────────────────────
 
+# ── бронь ──────────────────────────────────────────────────────────────
+
+def _who(frm):
+    name = " ".join(x for x in (frm.get("first_name"), frm.get("last_name")) if x) or "клиент"
+    return name, frm.get("username")
+
+
+def book(chat, u, cid, frm):
+    """Отправить заявку менеджеру. Номер уже должен быть в u["phone"]."""
+    cat, _, _ = catalog()
+    it = cat.get(cid)
+    if not it or not it["in_stock"]:
+        send(chat, "Эта сигара уже закончилась — обновите подборку.", reply_kb=MENU_KB)
+        return
+    name, uname = _who(frm)
+    e = html.escape
+    url = shop_url(it)
+    msg = ("📌 <b>Бронь из бота</b>\n\n"
+           f"<b>{e(it['name'])}</b> — {e(T.rub(it['price']))} за штуку"
+           + (f"\n{e(url)}" if url else "")
+           + f"\n\nКлиент: <a href=\"tg://user?id={int(chat)}\">{e(name)}</a>"
+           + (f" (@{e(uname)})" if uname else "")
+           + f"\nТелефон: <code>{e(u.get('phone') or '—')}</code>")
+    r = send(int(MANAGER_CHAT), msg) if MANAGER_CHAT.lstrip("-").isdigit() else None
+    if not (r and r.get("ok")):
+        log(f"бронь {cid}: не доставлена менеджеру (CIGARDAY_MANAGER_CHAT не задан или недоступен)")
+        send(chat, "Не получилось передать заявку менеджеру — попробуйте чуть позже "
+                   "или позвоните в магазин: +7 (812) 317-22-98.", reply_kb=MENU_KB)
+        return
+    u.setdefault("bookings", []).append({"cid": cid, "at": datetime.datetime.now().isoformat(timespec="seconds")})
+    u["bookings"] = u["bookings"][-50:]
+    u.pop("book_pending", None)
+    save_user(chat, u)
+    log(f"бронь {cid}: передана менеджеру")
+    send(chat, f"✅ <b>Заявка принята: {e(it['name'])}</b>\n\n"
+               f"Менеджер CigarDay свяжется с вами по номеру <code>{e(u['phone'])}</code>, "
+               "чтобы договориться, когда вам удобно забрать. Покупка — в магазине.",
+         reply_kb=MENU_KB)
+
+
+def start_booking(chat, u, cid, frm, q):
+    last = next((b for b in reversed(u.get("bookings") or []) if b["cid"] == cid), None)
+    if last and datetime.datetime.now() - datetime.datetime.fromisoformat(last["at"]) \
+            < datetime.timedelta(hours=BOOK_REPEAT_H):
+        answer(q, "Заявка на эту сигару уже у менеджера")
+        return
+    answer(q)
+    if u.get("phone"):
+        book(chat, u, cid, frm)
+        return
+    u["book_pending"] = cid
+    save_user(chat, u)
+    it = catalog()[0].get(cid) or {}
+    send(chat, f"📌 <b>Бронь: {html.escape(it.get('name', ''))}</b>\n\n"
+               "Чтобы менеджер CigarDay мог с вами связаться, поделитесь номером телефона — "
+               "кнопка внизу. Номер увидит только менеджер; удалить — /stop.",
+         reply_kb=CONTACT_KB)
+
+
 def on_message(m):
     chat = m["chat"]["id"]
     if m["chat"].get("type") != "private":
@@ -534,6 +613,21 @@ def on_message(m):
     if not u.get("consent"):
         ask_consent(chat)
         return
+    if m.get("contact") and u.get("book_pending"):
+        c = m["contact"]
+        if c.get("user_id") != (m.get("from") or {}).get("id"):
+            send(chat, "Нужен ваш собственный номер — нажмите «📱 Поделиться номером».", reply_kb=CONTACT_KB)
+            return
+        phone = re.sub(r"[^\d+]", "", c.get("phone_number") or "")[:20]
+        u["phone"] = phone if phone.startswith("+") else "+" + phone
+        book(chat, u, u["book_pending"], m.get("from") or {})
+        return
+    if u.get("book_pending") and (text == BTN_CANCEL or cmd):
+        u.pop("book_pending", None)
+        save_user(chat, u)
+        if text == BTN_CANCEL:
+            send(chat, "Бронь отменена.", reply_kb=MENU_KB)
+            return
     if cmd == "/start":
         send(chat, "Меню — внизу экрана.", reply_kb=MENU_KB)
         if not u.get("history"):
@@ -570,6 +664,7 @@ _CB = [
     (re.compile(r"demo:(demo1|demo2)"), lambda m: ("demo", m[1])),
     (re.compile(r"p:([fs]):(\d{1,2})"), lambda m: ("p", m[1], int(m[2]))),
     (re.compile(r"rv:(\d{1,2})"), lambda m: ("rv", int(m[1]))),
+    (re.compile(r"bk:([fs]):(\d{1,2})"), lambda m: ("bk", m[1], int(m[2]))),
     (re.compile(r"r:(\d{1,2}):([1-5])"), lambda m: ("r", int(m[1]), int(m[2]))),
 ]
 
@@ -626,6 +721,13 @@ def on_callback(q):
             show_pick(chat, u, fresh=True, mid=mid if is_photo else None)
         else:
             show_pick(chat, u, tab=tab, i=i, mid=mid if is_photo else None)
+    elif data == "bk":
+        _, tab, i = cb
+        items = (u.get("pick") or {}).get(tab) or []
+        if i >= len(items):
+            answer(q, "Подборка обновилась — откройте её заново")
+            return
+        start_booking(chat, u, items[i]["cid"], q.get("from") or {}, q)
     elif data == "rv":
         answer(q)
         show_rate(chat, u, cb[1], mid=mid if is_photo else None)
