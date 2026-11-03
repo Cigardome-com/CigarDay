@@ -1,0 +1,30 @@
+# Тестовый бот CigarDay (cigarday/bot.py). Установка на сервере-сборщике:
+#   git clone https://github.com/Cigardome-com/CigarDay.git /opt/cigarday-bot
+#   cp /opt/cigarday-bot/deploy/cigarday-bot.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now cigarday-bot
+# Логи: journalctl -u cigarday-bot -f
+# Обновить код: cd /opt/cigarday-bot && git pull && systemctl restart cigarday-bot
+#
+# Токен — CIGARDAY_TESTBOT_TOKEN в общем .env сервера (/opt/cigarindex/.env).
+# Цены и наличие — из /opt/cigarindex/data (обновляет ночной сбор CigarIndex).
+# Состояние (истории, оценки) — /var/lib/cigarday-bot, вне репозитория.
+[Unit]
+Description=CigarDay test bot (recommendations + ratings)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cigarday-bot
+EnvironmentFile=-/opt/cigarindex/.env
+Environment=CIGARDAY_BOT_STATE=/var/lib/cigarday-bot
+Environment=CIGARINDEX_ROOT=/opt/cigarindex
+ExecStart=/usr/bin/python3 /opt/cigarday-bot/cigarday/bot.py
+StateDirectory=cigarday-bot
+StateDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
